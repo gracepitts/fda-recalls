@@ -1,0 +1,14 @@
+# Core dependencies
+requests>=2.31.0
+duckdb>=0.9.0
+pandas>=2.0.0
+
+# Workflow orchestration
+prefect>=2.14.0
+
+# Visualization
+plotly>=5.17.0
+matplotlib>=3.7.0
+
+# Utilities
+python-dotenv>=1.0.0
