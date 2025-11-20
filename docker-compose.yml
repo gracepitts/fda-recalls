@@ -1,0 +1,13 @@
+version: '3.8'
+services:
+  pipeline:
+    build: .
+    container_name: fda_recall_pipeline
+    volumes:
+      - ./:/app
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./plots:/app/plots
+    environment:
+      - MAX_RECORDS=1000
+    command: ["python", "scripts/run_pipeline.py", "--max-records", "${MAX_RECORDS}"]
