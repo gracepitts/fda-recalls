@@ -1,6 +1,6 @@
 # Team FDA Recalls
 
-## Team members:
+## Team members
 Grace Pitts and Alka Link
 
 ## Data Source
