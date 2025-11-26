@@ -19,6 +19,7 @@ Offer a brief analysis of the data with your findings. Keep it to one brief, cle
 **Brief Analysis of FDA Recall Trends (2012-2025)**
 
 FDA recall activity shows long term structural patterns that reveal where product risk is most heavily concentrated and how regulatory pressures have evolved. Across food and drug recalls it is clear that manufacturing and sterility failures, not small contamination events, drive the majority of recalls. 
+
 Key Insights:
 
 - Sterility and cGMP failures dominate recalls, showing the systemic manufacturing issues. The most common recall reason by a wide margin is “Lack of Assurance of Sterility,” followed by many cGMP (current good manufacturing practice) failures. This suggests that recalls are a lot less about unexpected hazards and more about quality system failures, like improper documentation, temperature excursions, inadequate validation processes, etc. The real world implications of this is that these issues scale across entire production lots, which can increase regulatory burden. They are also preventable with better process control, which means that there could be a strong ROI for automated monitoring technology. 
