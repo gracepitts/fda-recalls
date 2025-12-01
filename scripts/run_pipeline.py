@@ -60,7 +60,10 @@ if args.no_prefect:
         plot_yearly_trend,
         plot_top_firms,
         plot_reasons,
-        plot_class_distribution
+        plot_class_distribution,
+        plot_drug_food_comparison,
+        plot_drug_food_enhanced,
+        plot_drug_food_monthly,
     )
 
     logging.info(f"Running sequential pipeline with max_records={args.max_records}")
@@ -101,6 +104,9 @@ else:
             plot_top_firms,
             plot_reasons,
             plot_class_distribution,
+            plot_drug_food_comparison,
+            plot_drug_food_enhanced,
+            plot_drug_food_monthly,
         )
 
         logging.info(f"Running sequential pipeline with max_records={args.max_records}")
@@ -111,5 +117,9 @@ else:
         plot_top_firms()
         plot_reasons()
         plot_class_distribution()
+        # Additional comparative and enhanced visuals
+        plot_drug_food_comparison()
+        plot_drug_food_enhanced()
+        plot_drug_food_monthly()
 
         logging.info("Sequential pipeline complete (fallback)")
