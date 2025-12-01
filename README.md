@@ -1,4 +1,4 @@
-# To run, install requirements.txt, then run the scripts in the scripts folder in sequential order (ingest_fda.py, process_fda.py, run_pipeline.py, visualize_fda.py). 
+## To run, install requirements.txt, then run the scripts in the scripts folder in sequential order (ingest_fda.py, process_fda.py, run_pipeline.py, visualize_fda.py). 
 
 # Team FDA Recalls
 
