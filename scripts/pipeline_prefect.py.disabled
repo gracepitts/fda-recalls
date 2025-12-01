@@ -1,3 +1,5 @@
+#Do not run this file, run all other files in scripts folder. To run with prefect, need to change the name and remove disabled. 
+
 import os
 import logging
 
