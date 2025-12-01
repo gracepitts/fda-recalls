@@ -1,4 +1,7 @@
-#Do not run this file, run all other files in scripts folder. To run with prefect, need to change the name and remove disabled. 
+# Do not run this file directly; it's currently disabled.
+# To enable Prefect orchestration, restore the filename to
+# `pipeline_prefect.py` and ensure a compatible Prefect/Pydantic
+# environment is installed.
 
 import os
 import logging
