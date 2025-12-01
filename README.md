@@ -26,7 +26,7 @@ FDA recall activity shows long term structural patterns that reveal where produc
 
 Include at least one compelling plot or visualization of your work. Add images in your subdirectory and then display them using markdown in your README.md file.
 
-![alt text](reasons.png)
+![Reasons for Recall Plot](plots/reasons.png)
 
 ## GitHub Repository
 https://github.com/gracepitts/fda-recalls 
