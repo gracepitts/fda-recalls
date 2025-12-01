@@ -1,0 +1,94 @@
+import os
+import logging
+
+# Prefect is used as an orchestration tool — it lets us structure the pipeline into tasks
+# and track execution or manage scheduling. If Prefect is unavailable, we fail early with
+# a helpful reminder so that users do not run the pipeline without required dependencies.
+try:
+    from prefect import flow, task, get_run_logger
+except Exception as e:
+    raise ImportError(
+        "Prefect import failed. Install project dependencies (see requirements.txt) "
+        "and ensure a compatible Prefect/Pydantic combination is present. "
+        f"Underlying error: {e}"
+    )
+
+# Import the three core stages of the data pipeline:
+# ingest: retrieves recall data from the OpenFDA API
+# process: cleans and transforms data stored in DuckDB
+# visualize: generates final plots from the cleaned dataset
+from ingest_fda import ingest
+from process_fda import process
+from visualize_fda import (
+    plot_yearly_trend,
+    plot_top_firms,
+    plot_reasons,
+    plot_class_distribution,
+)
+
+# Configuration constants, including logging and ingest limits
+from config import LOG_DIR, MAX_RECORDS
+
+# Create log directory if it does not already exist
+os.makedirs(LOG_DIR, exist_ok=True)
+
+# Configure logging to capture pipeline execution details
+logging.basicConfig(
+    filename=os.path.join(LOG_DIR, "pipeline.log"),
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+
+@task
+def task_ingest(max_records: int = MAX_RECORDS):
+    """
+    Prefect task wrapper for the ingestion process.
+    Uses Prefect's task-level logger for structured workflow output.
+    """
+    logger = get_run_logger()
+    logger.info(f"Starting ingest (max_records={max_records})...")
+    ingest(max_records=max_records)
+    logger.info("Ingest complete.")
+
+@task
+def task_process():
+    """
+    Prefect task wrapper for data processing and cleaning.
+    """
+    logger = get_run_logger()
+    logger.info("Starting process...")
+    process()
+    logger.info("Process complete.")
+
+@task
+def task_visualize():
+    """
+    Prefect task wrapper for visualization generation.
+    Produces multiple figures saved to the output directory.
+    """
+    logger = get_run_logger()
+    logger.info("Generating plots...")
+    plot_yearly_trend()
+    plot_top_firms()
+    plot_reasons()
+    plot_class_distribution()
+    logger.info("Plots saved.")
+
+@flow(name="fda-recalls-pipeline")
+def run_pipeline(max_records: int = MAX_RECORDS):
+    """
+    Main Prefect workflow responsible for executing the complete ETL pipeline:
+    1. Ingest API data into DuckDB
+    2. Process and clean the data
+    3. Produce visual summaries for analysis
+
+    Arguments:
+        max_records: Maximum number of recall records to ingest from API sources.
+    """
+    task_ingest(max_records)
+    task_process()
+    task_visualize()
+
+# Allow running the pipeline directly without needing Prefect UI or orchestration service
+if __name__ == "__main__":
+    run_pipeline()

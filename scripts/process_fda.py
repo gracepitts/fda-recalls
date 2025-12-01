@@ -5,14 +5,19 @@ import pandas as pd
 from datetime import datetime
 from config import DUCKDB_PATH, LOG_DIR
 
+# Ensure the logging directory exists so logs can be written successfully
 os.makedirs(LOG_DIR, exist_ok=True)
 
+# Configure pipeline processing logs
+# Logs document when cleaning and SQL steps occur
 logging.basicConfig(
     filename=os.path.join(LOG_DIR, "process.log"),
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 
+# SQL to create a cleaned output table if it doesn't already exist.
+# This schema enforces types and improves data consistency over raw ingest format.
 CREATE_PROCESSED_SQL = """
 CREATE TABLE IF NOT EXISTS enforcement_clean AS
 SELECT * FROM (SELECT
@@ -29,8 +34,13 @@ SELECT * FROM (SELECT
 ) WHERE 1=0;
 """
 
+# Remove previous processed data before inserting refreshed results
 TRUNCATE_SQL = "DELETE FROM enforcement_clean;"
 
+# Insert cleaned and normalized data from enforcement_raw into enforcement_clean:
+# - Casts dates as actual DATE types
+# - Forces uppercase where appropriate for grouping consistency
+# - Strips whitespace to prevent duplicates caused by formatting differences
 INSERT_CLEAN_SQL = """
 INSERT INTO enforcement_clean
 SELECT
@@ -47,6 +57,8 @@ SELECT
 FROM enforcement_raw;
 """
 
+# Create materialized SQL views to support visualization queries.
+# These aggregate and summarize the cleaned dataset.
 CREATE_VIEWS_SQL = """
 CREATE OR REPLACE VIEW v_yearly_counts AS
 SELECT
@@ -88,6 +100,13 @@ ORDER BY 2 DESC;
 """
 
 def process():
+    """
+    Main processing step:
+    - Creates the cleaned version of the enforcement data
+    - Clears any outdated results
+    - Inserts normalized values
+    - Builds SQL views for analytics and visualization
+    """
     conn = duckdb.connect(DUCKDB_PATH)
     conn.execute(CREATE_PROCESSED_SQL)
     conn.execute(TRUNCATE_SQL)
@@ -96,6 +115,6 @@ def process():
     conn.close()
     logging.info("Processing complete. Clean table and views updated.")
 
+# Allow standalone execution without Prefect orchestration
 if __name__ == "__main__":
     process()
-

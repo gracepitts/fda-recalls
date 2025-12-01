@@ -4,14 +4,20 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from config import DUCKDB_PATH
 
+# Directory where all plots will be stored
 PLOT_DIR = "plots"
 os.makedirs(PLOT_DIR, exist_ok=True)
 
 def fetch_df(sql: str) -> pd.DataFrame:
+    """
+    Helper that runs a SQL query against DuckDB and returns a DataFrame.
+    Used by all plotting functions.
+    """
     with duckdb.connect(DUCKDB_PATH) as conn:
         return conn.execute(sql).df()
 
 def plot_yearly_trend():
+    """Line chart showing count of recalls per year."""
     df = fetch_df("SELECT * FROM v_yearly_counts")
     if df.empty:
         return
@@ -26,6 +32,7 @@ def plot_yearly_trend():
     plt.close()
 
 def plot_top_firms():
+    """Horizontal bar chart of the top 20 recalling firms."""
     df = fetch_df("SELECT * FROM v_top_firms")
     if df.empty:
         return
@@ -39,11 +46,13 @@ def plot_top_firms():
     plt.close()
 
 def plot_reasons():
+    """Horizontal bar chart for most common recall reasons."""
     df = fetch_df("SELECT * FROM v_reasons")
     if df.empty:
         return
     plt.figure(figsize=(10,7))
     df = df.sort_values("recalls")
+    # Truncate text labels to avoid overcrowding
     plt.barh(df["reason_for_recall"].str.slice(0,60), df["recalls"])
     plt.title("Most Common Reasons for Recall (truncated labels)")
     plt.xlabel("Recalls")
@@ -52,6 +61,7 @@ def plot_reasons():
     plt.close()
 
 def plot_class_distribution():
+    """Bar chart showing distribution of recall classes (e.g., Class I, II, III)."""
     df = fetch_df("SELECT * FROM v_class_distribution")
     if df.empty:
         return
@@ -65,7 +75,10 @@ def plot_class_distribution():
     plt.close()
 
 def plot_drug_food_comparison():
-    """Compare counts of recalls for drug vs food over time (by year)."""
+    """
+    Line chart comparing recalls by source (drug vs food)
+    aggregated by year using enforcement_raw table.
+    """
     sql = (
         "SELECT source, SUBSTR(report_date, 1, 4) AS year, COUNT(*) AS recalls "
         "FROM enforcement_raw "
@@ -77,9 +90,8 @@ def plot_drug_food_comparison():
     if df.empty:
         return
 
-    # Pivot so each source is a column
+    # Pivot so each recall source forms a separate line
     df_pivot = df.pivot(index="year", columns="source", values="recalls").fillna(0)
-    # Sort years numerically
     df_pivot.index = df_pivot.index.astype(int)
     df_pivot = df_pivot.sort_index()
 
@@ -97,7 +109,12 @@ def plot_drug_food_comparison():
     plt.close()
 
 def plot_drug_food_enhanced():
-    """Create enhanced comparison plots: stacked area, normalized per-year, and cumulative counts."""
+    """
+    Three enhanced visuals for deeper trend insight:
+    1. Stacked area (volume over time)
+    2. Normalized share (percentage by year)
+    3. Cumulative totals (long-term divergence)
+    """
     sql = (
         "SELECT source, SUBSTR(report_date, 1, 4) AS year, COUNT(*) AS recalls "
         "FROM enforcement_raw "
@@ -113,46 +130,43 @@ def plot_drug_food_enhanced():
     df_pivot.index = df_pivot.index.astype(int)
     df_pivot = df_pivot.sort_index()
 
-    # Stacked area plot
+    # 1) Stacked Area Plot
     plt.figure(figsize=(10,6))
     df_pivot.plot(kind='area', stacked=True, alpha=0.6)
     plt.title('Stacked Area: Recalls by Source over Years')
     plt.xlabel('Year')
     plt.ylabel('Recalls')
-    plt.legend(title='Source')
-    plt.grid(True, linestyle='--', alpha=0.4)
     plt.tight_layout()
     plt.savefig(os.path.join(PLOT_DIR, 'drug_food_stacked_area.png'))
     plt.close()
 
-    # Normalized (percent) per-year
+    # 2) Normalized yearly share
     df_norm = df_pivot.div(df_pivot.sum(axis=1).replace(0, 1), axis=0)
     plt.figure(figsize=(10,6))
     df_norm.plot(kind='line', marker='o')
     plt.title('Normalized Share of Recalls by Source (per year)')
     plt.xlabel('Year')
     plt.ylabel('Share of Recalls')
-    plt.legend(title='Source')
-    plt.grid(True, linestyle='--', alpha=0.4)
     plt.tight_layout()
     plt.savefig(os.path.join(PLOT_DIR, 'drug_food_normalized_share.png'))
     plt.close()
 
-    # Cumulative counts
+    # 3) Cumulative recalls
     df_cum = df_pivot.cumsum()
     plt.figure(figsize=(10,6))
     df_cum.plot(marker='o')
     plt.title('Cumulative Recalls by Source')
     plt.xlabel('Year')
     plt.ylabel('Cumulative Recalls')
-    plt.legend(title='Source')
-    plt.grid(True, linestyle='--', alpha=0.4)
     plt.tight_layout()
     plt.savefig(os.path.join(PLOT_DIR, 'drug_food_cumulative.png'))
     plt.close()
 
 def plot_drug_food_monthly():
-    """Monthly trend (last 5 years) for finer-grained comparison."""
+    """
+    Monthly granularity (last ~5 years only)
+    Helps detect short-term spikes or seasonality patterns.
+    """
     sql = (
         "SELECT source, SUBSTR(report_date,1,6) AS yearmonth, COUNT(*) AS recalls "
         "FROM enforcement_raw "
@@ -163,25 +177,28 @@ def plot_drug_food_monthly():
     df = fetch_df(sql)
     if df.empty:
         return
+
     df_pivot = df.pivot(index='yearmonth', columns='source', values='recalls').fillna(0)
-    # focus on last 60 months if present
+
+    # Restrict to most recent 60 months for readability
     if len(df_pivot) > 60:
         df_pivot = df_pivot.tail(60)
 
     plt.figure(figsize=(12,6))
     for col in df_pivot.columns:
         plt.plot(df_pivot.index, df_pivot[col], marker='o', label=str(col))
+
     plt.title('Monthly Recalls (last ~5 years) by Source')
     plt.xlabel('YearMonth')
     plt.ylabel('Recalls')
     plt.xticks(rotation=45)
     plt.legend(title='Source')
-    plt.grid(True, linestyle='--', alpha=0.4)
     plt.tight_layout()
     plt.savefig(os.path.join(PLOT_DIR, 'drug_food_monthly_recent.png'))
     plt.close()
 
 if __name__ == "__main__":
+    # Run all plots when this script is executed standalone
     plot_yearly_trend()
     plot_top_firms()
     plot_reasons()
@@ -189,4 +206,3 @@ if __name__ == "__main__":
     plot_drug_food_comparison()
     plot_drug_food_enhanced()
     plot_drug_food_monthly()
-

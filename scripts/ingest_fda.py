@@ -1,13 +1,13 @@
-import os
-import time
-import math
-import json
-import logging
-import requests
-import duckdb
-import pandas as pd
-from dateutil import parser
-from config import (
+import os  # For directory and path handling
+import time  # For managing request delays and timing
+import math  # Math utilities (may not be heavily used)
+import json  # Writing raw response dumps for traceability
+import logging  # Logging ingestion progress + errors
+import requests  # API requests to OpenFDA
+import duckdb  # Local fast SQL database
+import pandas as pd  # Data manipulation + DataFrame structure
+from dateutil import parser  # Date parsing utility (not used directly here)
+from config import (  # Project configuration settings
     FDA_ENFORCEMENT_ENDPOINT,
     FDA_ENFORCEMENT_ENDPOINTS,
     LIMIT_PER_REQUEST,
@@ -18,19 +18,21 @@ from config import (
     LOG_DIR
 )
 
+# Ensure DuckDB directory exists
 os.makedirs(os.path.dirname(DUCKDB_PATH), exist_ok=True)
+
+# Ensure raw dumps directory exists — remove file if a conflict exists
 if RAW_DUMP_DIR:
     try:
         os.makedirs(RAW_DUMP_DIR, exist_ok=True)
     except FileExistsError:
-        # A non-directory (file) exists at RAW_DUMP_DIR — replace it with
-        # the expected directory so subsequent dumping works. This can
-        # happen if an artifact named `raw` was created as a file.
         if os.path.isfile(RAW_DUMP_DIR):
             os.remove(RAW_DUMP_DIR)
             os.makedirs(RAW_DUMP_DIR, exist_ok=True)
         else:
             raise
+
+# Ensure log directory exists
 try:
     os.makedirs(LOG_DIR, exist_ok=True)
 except FileExistsError:
@@ -40,12 +42,14 @@ except FileExistsError:
     else:
         raise
 
+# Logging setup — writes logs to ingest.log for debugging and run history
 logging.basicConfig(
     filename=os.path.join(LOG_DIR, "ingest.log"),
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 
+# Schema for the enforcement_raw table — ensures compatibility across API changes
 CREATE_SQL = """
 CREATE TABLE IF NOT EXISTS enforcement_raw AS
 SELECT * FROM (SELECT
@@ -72,6 +76,7 @@ SELECT * FROM (SELECT
 ) WHERE 1=0;
 """
 
+# SQL statement for inserting incoming batches by column name
 UPSERT_SQL = """
 INSERT INTO enforcement_raw BY NAME
 SELECT
@@ -99,7 +104,7 @@ FROM df
 """
 
 def normalize_record(r: dict) -> dict:
-    # Flatten some nested openfda fields if present
+    # Normalize nested openfda fields to flat schema
     openfda = r.get("openfda", {})
     nui = None
     if isinstance(openfda, dict):
@@ -112,6 +117,7 @@ def normalize_record(r: dict) -> dict:
         if isinstance(ss, list) and ss:
             spl_set_id = ss[0]
 
+    # Return flattened data row
     return {
         "recall_number": r.get("recall_number"),
         "reason_for_recall": r.get("reason_for_recall"),
@@ -135,26 +141,20 @@ def normalize_record(r: dict) -> dict:
     }
 
 def ingest(max_records=MAX_RECORDS, endpoints: list | None = None, query: str | None = None):
-    # Connect to DuckDB. If the file exists but is not a valid DuckDB
-    # database (for example an empty placeholder file), remove it and
-    # recreate so ingestion can proceed.
+    # Connect safely to DB — handles corrupted DB files by recreating
     try:
         conn = duckdb.connect(DUCKDB_PATH)
     except Exception:
         if os.path.exists(DUCKDB_PATH):
-            try:
-                os.remove(DUCKDB_PATH)
-            except Exception:
-                raise
+            os.remove(DUCKDB_PATH)
         conn = duckdb.connect(DUCKDB_PATH)
+
     conn.execute(CREATE_SQL)
-    # Ensure legacy tables created before the `source` column existed
-    # get that column added so later UPSERTs that include `source` succeed.
+
+    # Ensure legacy tables have source column
     try:
         conn.execute("ALTER TABLE enforcement_raw ADD COLUMN IF NOT EXISTS source VARCHAR;")
     except Exception:
-        # Older duckdb versions may not support IF NOT EXISTS; attempt
-        # to add the column and ignore errors if it already exists.
         try:
             conn.execute("ALTER TABLE enforcement_raw ADD COLUMN source VARCHAR;")
         except Exception:
@@ -171,12 +171,10 @@ def ingest(max_records=MAX_RECORDS, endpoints: list | None = None, query: str | 
     t0 = time.time()
     sleep_seconds = max(60.0 / REQUESTS_PER_MIN, 0.35)
 
-    # Loop over configured endpoints and fetch from each until we reach
-    # `max_records` total across sources.
+    # Loop through endpoints extracting records
     for endpoint in endpoints:
         if total >= max_records:
             break
-
         try:
             source_name = endpoint.split('/')[3]
         except Exception:
@@ -190,7 +188,7 @@ def ingest(max_records=MAX_RECORDS, endpoints: list | None = None, query: str | 
             resp = requests.get(endpoint, params=params, timeout=30)
             if resp.status_code != 200:
                 logging.warning(f"HTTP {resp.status_code} at skip={skip}: {resp.text[:200]}")
-                if resp.status_code in (429, 503):
+                if resp.status_code in (429, 503):  # Rate-limit and retry
                     time.sleep(5)
                     continue
                 break
@@ -198,30 +196,27 @@ def ingest(max_records=MAX_RECORDS, endpoints: list | None = None, query: str | 
             payload = resp.json()
             results = payload.get("results", [])
             if not results:
-                logging.info("No more results for %s, moving to next endpoint.", source_name)
                 break
 
-            # normalize and insert
             normalized = [normalize_record(r) for r in results]
             df = pd.DataFrame(normalized)
-            # annotate source
             df["source"] = source_name
 
-            # avoid inserting duplicates by event_id
+            # Deduplicate by event_id to prevent storage bloat + errors
             try:
                 existing_rows = conn.execute("SELECT event_id FROM enforcement_raw WHERE event_id IS NOT NULL").fetchall()
                 existing_ids = set(r[0] for r in existing_rows if r[0] is not None)
             except Exception:
                 existing_ids = set()
+            df = df[~df["event_id"].isin(existing_ids)]
 
-            if "event_id" in df.columns:
-                df = df[~df["event_id"].isin(existing_ids)]
-
+            # Save original JSON files for reproducibility checks later
             if RAW_DUMP_DIR:
                 dump_path = os.path.join(RAW_DUMP_DIR, f"{source_name}_batch_{skip}.json")
                 with open(dump_path, "w") as f:
                     json.dump(results, f)
 
+            # Write DataFrame into DuckDB if not empty
             if not df.empty:
                 conn.register("df", df)
                 conn.execute(UPSERT_SQL)
@@ -231,6 +226,7 @@ def ingest(max_records=MAX_RECORDS, endpoints: list | None = None, query: str | 
             skip += n
             logging.info(f"Ingested batch: {n} (total={total}) skip={skip}")
 
+            # Stop loop if hitting final partial page
             if n < LIMIT_PER_REQUEST:
                 break
 
@@ -240,16 +236,10 @@ def ingest(max_records=MAX_RECORDS, endpoints: list | None = None, query: str | 
     logging.info(f"Done. Total records ingested: {total}. Elapsed: {time.time() - t0:.1f}s")
 
 if __name__ == "__main__":
-    # Example: Ingest all recalls; you can also pass an OpenFDA 'search' query
-    # e.g., query="classification:Class%20II"
-    ingest()
+    ingest()  # Default full dataset ingestion
 
 def ingest_by_years(start_year: int, end_year: int, max_records: int = MAX_RECORDS, endpoints: list | None = None):
-    """Ingest data year-by-year for each endpoint in `endpoints`, using
-    OpenFDA date range queries (report_date). This makes sure both
-    sources are fetched for the same year ranges. Stops when
-    `max_records` total rows have been attempted.
-    """
+    """Ingest each year independently — avoids API skip limits & ensures alignment of endpoints by year."""
     if endpoints is None:
         endpoints = FDA_ENFORCEMENT_ENDPOINTS
 
@@ -259,25 +249,20 @@ def ingest_by_years(start_year: int, end_year: int, max_records: int = MAX_RECOR
     for year in range(start_year, end_year + 1):
         if total >= max_records:
             break
-        # build search range for the year (YYYY0101 to YYYY1231)
         start_date = f"{year}0101"
         end_date = f"{year}1231"
-        # OpenFDA expects a space-separated range token: 'report_date:[YYYYMMDD TO YYYYMMDD]'
         year_query = f"report_date:[{start_date} TO {end_date}]"
 
         for endpoint in endpoints:
             if total >= max_records:
                 break
-
             source_name = endpoint.split('/')[3] if '/' in endpoint else endpoint
-
             skip = 0
             while total < max_records:
                 params = {"limit": LIMIT_PER_REQUEST, "skip": skip, "search": year_query}
-
                 resp = requests.get(endpoint, params=params, timeout=30)
+
                 if resp.status_code != 200:
-                    logging.warning(f"HTTP {resp.status_code} at year={year} skip={skip}: {resp.text[:200]}")
                     if resp.status_code in (429, 503):
                         time.sleep(5)
                         continue
@@ -286,33 +271,31 @@ def ingest_by_years(start_year: int, end_year: int, max_records: int = MAX_RECOR
                 payload = resp.json()
                 results = payload.get("results", [])
                 if not results:
-                    logging.info("No more results for %s year=%s, moving on.", source_name, year)
                     break
 
                 normalized = [normalize_record(r) for r in results]
                 df = pd.DataFrame(normalized)
                 df["source"] = source_name
 
-                # dedupe against existing event_ids
+                # Deduplicate
                 try:
                     with duckdb.connect(DUCKDB_PATH) as conn:
                         existing_rows = conn.execute("SELECT event_id FROM enforcement_raw WHERE event_id IS NOT NULL").fetchall()
                         existing_ids = set(r[0] for r in existing_rows if r[0] is not None)
                 except Exception:
                     existing_ids = set()
+                df = df[~df["event_id"].isin(existing_ids)]
 
-                if "event_id" in df.columns:
-                    df = df[~df["event_id"].isin(existing_ids)]
-
+                # Save raw JSON
                 if RAW_DUMP_DIR:
                     dump_path = os.path.join(RAW_DUMP_DIR, f"{source_name}_year_{year}_batch_{skip}.json")
                     with open(dump_path, "w") as f:
                         json.dump(results, f)
 
+                # Insert into DuckDB
                 if not df.empty:
                     with duckdb.connect(DUCKDB_PATH) as conn:
                         conn.execute(CREATE_SQL)
-                        # ensure column exists
                         try:
                             conn.execute("ALTER TABLE enforcement_raw ADD COLUMN IF NOT EXISTS source VARCHAR;")
                         except Exception:
@@ -326,60 +309,47 @@ def ingest_by_years(start_year: int, end_year: int, max_records: int = MAX_RECOR
                 n = len(results)
                 total += n
                 skip += n
-                logging.info(f"Year {year} Ingested batch: {n} (total={total}) src={source_name} skip={skip}")
 
                 if n < LIMIT_PER_REQUEST:
                     break
 
                 time.sleep(max(60.0 / REQUESTS_PER_MIN, 0.35))
 
-    logging.info(f"Year-aligned ingest done. Total records attempted: {total}. Elapsed: {time.time() - t0:.1f}s")
     return total
 
-
-def ingest_by_time_windows(start_year: int,
-                           end_year: int,
-                           window_months: int = 6,
-                           max_records: int = MAX_RECORDS,
-                           endpoints: list | None = None):
-    """Ingest data by sliding time-windows (in months) for each endpoint.
-    This helps avoid OpenFDA 'skip' limits by querying smaller date ranges
-    and collecting more records where available.
-
-    Example: window_months=3 will request 3-month windows for each year.
-    """
+def ingest_by_time_windows(start_year: int, end_year: int, window_months: int = 6,
+                           max_records: int = MAX_RECORDS, endpoints: list | None = None):
+    """Ingest using sliding monthly windows — increases depth of fetch without exceeding skip limit."""
     if endpoints is None:
         endpoints = FDA_ENFORCEMENT_ENDPOINTS
 
-    from datetime import datetime, timedelta
+    from datetime import datetime
+    from calendar import monthrange
 
+    # Helper — iterates month windows until coverage is complete
     def month_range_iter(start_ym: tuple[int, int], end_ym: tuple[int, int], step_months: int):
         y, m = start_ym
         end_y, end_m = end_ym
         while (y, m) <= (end_y, end_m):
-            # compute window end
             total_months = y * 12 + (m - 1) + (step_months - 1)
             ey = total_months // 12
             em = (total_months % 12) + 1
             yield (y, m), (ey, em)
-            # advance
             nxt_total = y * 12 + (m - 1) + step_months
             y = nxt_total // 12
             m = (nxt_total % 12) + 1
 
     total = 0
     t0 = time.time()
-
     start_ym = (start_year, 1)
     end_ym = (end_year, 12)
 
+    # Loop through month ranges and ingest
     for (sy, sm), (ey, em) in month_range_iter(start_ym, end_ym, window_months):
         if total >= max_records:
             break
 
         start_date = f"{sy}{sm:02d}01"
-        # compute last day of em month
-        from calendar import monthrange
         last_day = monthrange(ey, em)[1]
         end_date = f"{ey}{em:02d}{last_day:02d}"
         window_query = f"report_date:[{start_date} TO {end_date}]"
@@ -387,7 +357,6 @@ def ingest_by_time_windows(start_year: int,
         for endpoint in endpoints:
             if total >= max_records:
                 break
-
             try:
                 source_name = endpoint.split('/')[3]
             except Exception:
@@ -397,8 +366,8 @@ def ingest_by_time_windows(start_year: int,
             while total < max_records:
                 params = {"limit": LIMIT_PER_REQUEST, "skip": skip, "search": window_query}
                 resp = requests.get(endpoint, params=params, timeout=30)
+
                 if resp.status_code != 200:
-                    logging.warning(f"HTTP {resp.status_code} at window {start_date}-{end_date} skip={skip}: {resp.text[:200]}")
                     if resp.status_code in (429, 503):
                         time.sleep(5)
                         continue
@@ -407,29 +376,28 @@ def ingest_by_time_windows(start_year: int,
                 payload = resp.json()
                 results = payload.get("results", [])
                 if not results:
-                    logging.info("No more results for %s window=%s-%s, moving on.", source_name, start_date, end_date)
                     break
 
                 normalized = [normalize_record(r) for r in results]
                 df = pd.DataFrame(normalized)
                 df["source"] = source_name
 
-                # dedupe
+                # Deduplicate against existing DB
                 try:
                     with duckdb.connect(DUCKDB_PATH) as conn:
                         existing_rows = conn.execute("SELECT event_id FROM enforcement_raw WHERE event_id IS NOT NULL").fetchall()
                         existing_ids = set(r[0] for r in existing_rows if r[0] is not None)
                 except Exception:
                     existing_ids = set()
+                df = df[~df["event_id"].isin(existing_ids)]
 
-                if "event_id" in df.columns:
-                    df = df[~df["event_id"].isin(existing_ids)]
-
+                # Write raw batch file
                 if RAW_DUMP_DIR:
                     dump_path = os.path.join(RAW_DUMP_DIR, f"{source_name}_{sy}{sm:02d}_{ey}{em:02d}_batch_{skip}.json")
                     with open(dump_path, "w") as f:
                         json.dump(results, f)
 
+                # Insert batch into DB safely
                 if not df.empty:
                     with duckdb.connect(DUCKDB_PATH) as conn:
                         conn.execute(CREATE_SQL)
@@ -446,13 +414,11 @@ def ingest_by_time_windows(start_year: int,
                 n = len(results)
                 total += n
                 skip += n
-                logging.info(f"Window {start_date}-{end_date} Ingested batch: {n} (total={total}) src={source_name} skip={skip}")
 
                 if n < LIMIT_PER_REQUEST:
                     break
 
                 time.sleep(max(60.0 / REQUESTS_PER_MIN, 0.35))
 
-    logging.info(f"Time-window ingest done. Total records attempted: {total}. Elapsed: {time.time() - t0:.1f}s")
     return total
-
+    logging.info(f"Done. Total records ingested: {total}. Elapsed: {time.time() - t0:.1f}s")

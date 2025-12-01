@@ -1,21 +1,21 @@
-# General project configuration
+#Overall configuration
 
 FDA_ENFORCEMENT_ENDPOINT = "https://api.fda.gov/drug/enforcement.json"
-# Additional enforcement endpoints we may aggregate to increase dataset size
+# added more data sources
 FDA_ENFORCEMENT_ENDPOINTS = [
 	"https://api.fda.gov/drug/enforcement.json",
 	"https://api.fda.gov/food/enforcement.json",
 ]
 
 # API paging
-LIMIT_PER_REQUEST = 100           # OpenFDA max limit per page is typically 100
-MAX_RECORDS = 100000              # Stop once you’ve collected this many
-REQUESTS_PER_MIN = 180            # Be nice to the API
+LIMIT_PER_REQUEST = 100       
+MAX_RECORDS = 100000              
+REQUESTS_PER_MIN = 180           
 
 # Storage
 DUCKDB_PATH = "data/fda_recalls.duckdb"
-RAW_DUMP_DIR = "data/raw"         # optional: set to None to skip writing raw files
+RAW_DUMP_DIR = "data/raw"        
 
-# Prefect / logging
+#Logging
 LOG_DIR = "logs"
 
